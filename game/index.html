@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Porto Sol — Open-World Crime Game</title>
+<style>
+html,body{margin:0;height:100%;overflow:hidden;background:#1a120b;font-family:Verdana,system-ui,sans-serif;color:#fff}
+#game{position:fixed;inset:0;width:100%;height:100%;display:block}
+#hud{position:fixed;inset:0;pointer-events:none;display:none}
+#hud.on{display:block}
+.panel{background:rgba(12,16,24,.72);border:1px solid rgba(255,190,90,.35);border-radius:10px;backdrop-filter:blur(4px)}
+#wanted{position:absolute;top:12px;left:12px;padding:6px 12px;font-size:20px;letter-spacing:3px;color:#ffd34d}
+#health{position:absolute;top:56px;left:12px;width:200px;height:16px;background:rgba(0,0,0,.6);border:1px solid #555;border-radius:8px;overflow:hidden}
+#health-fill{display:block;height:100%;width:100%;background:linear-gradient(90deg,#37d67a,#a8e063)}
+#cash{position:absolute;top:80px;left:12px;padding:5px 12px;font-weight:bold;color:#7dff9a;font-size:17px}
+#time{position:absolute;top:12px;right:12px;padding:6px 12px;color:#9be8ff;font-weight:bold}
+#speed{position:absolute;bottom:14px;left:14px;padding:6px 12px;font-size:18px;color:#ffd34d}
+#weapon{position:absolute;bottom:14px;right:206px;padding:6px 12px;color:#fff}
+#objective{position:absolute;top:12px;left:50%;transform:translateX(-50%);padding:8px 18px;text-align:center;max-width:46vw}
+#objective-title{color:#ffd34d;font-weight:bold;font-size:15px}
+#objective-text{font-size:13px;color:#e8e8e8}
+#message{position:absolute;top:22%;left:50%;transform:translateX(-50%);padding:10px 22px;font-size:17px;color:#ffe9b0;display:none;text-align:center}
+#minimap{position:absolute;bottom:12px;right:12px;width:180px;height:180px;border:2px solid rgba(255,190,90,.5);border-radius:8px;background:#0c1420}
+#crosshair{position:absolute;top:50%;left:50%;width:14px;height:14px;margin:-7px 0 0 -7px;display:none}
+#crosshair:before,#crosshair:after{content:"";position:absolute;background:#fff;box-shadow:0 0 3px #000}
+#crosshair:before{left:6px;top:0;width:2px;height:14px}
+#crosshair:after{top:6px;left:0;width:14px;height:2px}
+.screen{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:radial-gradient(ellipse at 50% 30%,rgba(255,150,60,.28),rgba(8,10,18,.88) 70%);z-index:10}
+.screen[hidden]{display:none}
+.card{max-width:560px;width:92%;padding:28px 32px;text-align:center;background:rgba(10,14,22,.82);border:1px solid rgba(255,190,90,.45);border-radius:16px;box-shadow:0 10px 50px rgba(0,0,0,.6)}
+h1{margin:0 0 4px;font-size:52px;letter-spacing:6px;color:#ffb347;text-shadow:0 3px 0 #b3541e,0 6px 24px rgba(255,140,0,.5)}
+.tag{color:#7fe3ff;letter-spacing:3px;font-size:12px;margin-bottom:14px}
+.story{font-size:14px;line-height:1.55;color:#e8ddc8;margin:0 0 14px}
+.controls{font-size:12.5px;line-height:1.7;color:#c8d4e0;background:rgba(255,255,255,.05);border-radius:8px;padding:10px;margin-bottom:16px;text-align:left}
+button{pointer-events:auto;cursor:pointer;background:linear-gradient(180deg,#ffb347,#f07f13);color:#241300;border:0;border-radius:8px;padding:11px 26px;font-size:16px;font-weight:bold;margin:4px;box-shadow:0 3px 0 #8a4d0d}
+button:hover{filter:brightness(1.12)}
+button.ghost{background:rgba(255,255,255,.12);color:#fff;box-shadow:none;border:1px solid rgba(255,255,255,.35)}
+#save-info{font-size:12px;color:#9fb4c8;margin-top:10px}
+#loading{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#1a120b;z-index:20;font-size:18px;color:#ffb347}
+#loading[hidden]{display:none}
+</style>
+<script type="importmap">{"imports":{"three":"./vendor/three.module.min.js"}}</script>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="hud">
+  <div id="wanted" class="panel">☆☆☆☆☆</div>
+  <div id="health"><span id="health-fill"></span></div>
+  <div id="cash" class="panel">$0</div>
+  <div id="time" class="panel">17:30</div>
+  <div id="objective" class="panel"><div id="objective-title">Porto Sol</div><div id="objective-text">Press Start to begin.</div></div>
+  <div id="message" class="panel"></div>
+  <div id="speed" class="panel">0 km/h</div>
+  <div id="weapon" class="panel">Fists</div>
+  <canvas id="minimap" width="180" height="180"></canvas>
+  <div id="crosshair"></div>
+</div>
+<div id="menu" class="screen"><div class="card">
+  <h1>PORTO SOL</h1>
+  <div class="tag">A SUN-SOAKED COASTAL CITY &middot; OPEN WORLD</div>
+  <p class="story">Jax Marlowe came back to Porto Sol with nothing but a fast car and a faster reputation. Fixer Mara Voss has five jobs lined up — and the whole city is watching. Steal cars, dodge the heat, and drive like the sunset depends on it.</p>
+  <div class="controls"><b>Controls</b><br>WASD move / drive &middot; Shift sprint &middot; Space jump / handbrake<br>Mouse look &middot; Click shoot &middot; R reload &middot; 1/2/3 weapons<br>E enter / exit car &middot; F steal car &middot; H horn &middot; C camera<br>M missions &middot; P / Esc pause</div>
+  <button id="btn-start">Start Game</button>
+  <button id="btn-continue" class="ghost">Continue</button>
+  <button id="btn-howto" class="ghost">How to Play</button>
+  <div id="save-info"></div>
+</div></div>
+<div id="pause-menu" class="screen" hidden><div class="card">
+  <h1 style="font-size:34px">PAUSED</h1>
+  <p class="story">Porto Sol waits for no one. Well — right now it does.</p>
+  <button id="btn-resume">Resume</button>
+  <button id="btn-restart" class="ghost">Restart</button>
+  <button id="btn-mute" class="ghost">Mute</button>
+  <button id="btn-quit" class="ghost">Quit to Menu</button>
+</div></div>
+<div id="mission-screen" class="screen" hidden><div class="card">
+  <h1 id="mission-title" style="font-size:30px">Missions</h1>
+  <p id="mission-desc" class="story"></p>
+  <button id="btn-mission-close">Close</button>
+</div></div>
+<div id="gameover-screen" class="screen" hidden><div class="card">
+  <h1 style="font-size:34px">BUSTED / DOWN</h1>
+  <p class="story">Jax is out of the game — for now. Porto Sol always gives a second chance.</p>
+  <button id="btn-retry">Try Again</button>
+</div></div>
+<div id="complete-screen" class="screen" hidden><div class="card">
+  <h1 style="font-size:34px">SUNSET RUN COMPLETE</h1>
+  <p class="story">All five jobs done. Mara is impressed, the cops are furious, and Porto Sol is yours.</p>
+  <button id="btn-play-again">Play Again</button>
+</div></div>
+<div id="loading">Loading Porto Sol…</div>
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>
