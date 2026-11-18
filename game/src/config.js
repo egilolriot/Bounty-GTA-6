@@ -1,80 +1,80 @@
-// Porto Sol — central tuning table.
-// One place for every magic number so gameplay, city, police and camera
-// all read the same values. Nothing here is read at import time by the
-// DOM; it is pure data.
-export const CFG = {
-  // World generation seed. Same seed => same city, every load.
-  seed: 1337,
+// Porto Sol — shared world configuration (Round 2 rebuild, written from scratch).
+// No imports: pure data + constants shared by every other module.
+// Coordinate system: x east, z south, y up. City is 720x720 m centred on
+// the origin (x, z in -360..360). Roads form a grid every 90 m. Y = 0 is ground.
 
-  // Street grid: 9 blocks of 64 m with 16 m roads between them.
-  // Pitch 80 m, so the drivable grid spans -360 .. 360 on both axes.
-  grid: { blocks: 9, block: 64, road: 16 },
+export const WORLD = {
+  SIZE: 720,
+  HALF: 360,
+  ROAD: 90,
+  BLOCK: 90,
+};
 
-  // On-foot movement. accel is how fast velocity chases the target speed.
-  player: {
-    walkSpeed: 6, sprintSpeed: 10.5, jumpSpeed: 8.5,
-    gravity: 24, health: 100, accel: 40,
+export const COLORS = {
+  sky: 0x87b5d6,
+  road: 0x2e2e33,
+  sidewalk: 0x8a8a86,
+  building: [
+    0xc9a06a,
+    0x7a9cc6,
+    0xb5654d,
+    0x8fa98f,
+    0xd6c9a8,
+    0x6e7f9e,
+  ],
+  grass: 0x4a7c3a,
+  sand: 0xd9c28a,
+  sea: 0x2a6f8f,
+  lamp: 0xffd27a,
+};
+
+export const MISSIONS = [
+  {
+    name: 'First Wheels',
+    brief: 'Curi mobil, lalu antar ke garasi Mara.',
+    reward: 500,
+    type: 'goto',
+    target: { x: 120, z: 80 },
   },
-
-  // Driving model: arcade, grippy, with a handbrake for slides.
-  car: {
-    accel: 24, brake: 34, maxSpeed: 44, reverseSpeed: 13,
-    turn: 2.1, handbrake: 46, grip: 8,
+  {
+    name: 'Harbor Lights',
+    brief: 'Ambil paket di pelabuhan, lalu antar ke dermaga utara.',
+    reward: 800,
+    type: 'deliver',
+    target: { x: -200, z: -260 },
   },
-
-  // How many vehicles / pedestrians the world keeps alive.
-  vehicles: { trafficMax: 14, parkedMax: 6 },
-  pedestrians: { max: 26 },
-
-  // Ambient traffic and walkers.
-  traffic: { count: 14, speed: 9, spacing: 26 },
-  peds: { count: 26, speed: 1.7 },
-
-  // Police pursuit.
-  police: { chaseSpeed: 38, spawnDist: 55, maxCars: 5 },
-
-  // Wanted level 0..5. Heat decays slowly; crimes add heat.
-  wanted: {
-    max: 5, decay: 0.015,
-    heatPerSteal: 25, heatPerShot: 5, heatPerHit: 10,
+  {
+    name: 'Street Heat',
+    brief: 'Kabur dari kejaran polisi saat wanted level 2.',
+    reward: 1200,
+    type: 'evade',
+    target: { x: 0, z: 0 },
   },
-
-  // Third-person chase camera. farDist is the in-car distance.
-  camera: { nearDist: 7.5, farDist: 13, height: 3.4, lerp: 7, orbit: 0.9 },
-
-  // Keyboard layout. Each action lists every accepted KeyboardEvent.code.
-  keys: {
-    up: ['KeyW', 'ArrowUp'],
-    down: ['KeyS', 'ArrowDown'],
-    left: ['KeyA', 'ArrowLeft'],
-    right: ['KeyD', 'ArrowRight'],
-    sprint: ['ShiftLeft', 'ShiftRight'],
-    jump: ['Space'],
-    interact: ['KeyE'],
-    steal: ['KeyF'],
-    reload: ['KeyR'],
-    missions: ['KeyM'],
-    pause: ['KeyP', 'Escape'],
-    horn: ['KeyH'],
-    camera: ['KeyC'],
+  {
+    name: 'The Exchange',
+    brief: 'Antar koper ke titik tukar selagi dikejar polisi.',
+    reward: 2500,
+    type: 'deliver',
+    target: { x: 260, z: -140 },
   },
-
-  // Golden-hour palette: warm sunset sky over dusty streets.
-  colors: {
-    sky: 0xffc98a, fog: 0xf2b98a, sun: 0xffc37a,
-    hemiSky: 0x9fc8e8, hemiGround: 0x8a6a4a,
-    road: 0x3a3f46, sidewalk: 0xb9a98c, ground: 0xcbb58a, water: 0x2e7f9e,
+  {
+    name: 'Sunset Run',
+    brief: 'Capai mercusuar dengan wanted level 3, lalu lolos.',
+    reward: 5000,
+    type: 'escape',
+    target: { x: -320, z: 320 },
   },
+];
 
-  // Mission payouts in $, mission index 0..4.
-  rewards: [500, 800, 1200, 2500, 5000],
+export const PLAYER = {
+  walkSpeed: 6,
+  runSpeed: 10,
+  driveAccel: 22,
+  brake: 30,
+  maxHealth: 100,
+  maxSpeed: 42,
+};
 
-  // Weapon slots: index 0 is bare fists, keys 1/2/3 select the rest.
-  weapons: ['fists', 'pistol', 'smg', 'shotgun'],
-
-  // Mix levels (0..1).
-  audio: { music: 0.22, sfx: 0.5, siren: 0.28, engine: 0.2 },
-
-  // Time of day at spawn, in hours: 17.5 = 17:30, late afternoon.
-  dayStart: 17.5,
+export const WANTED = {
+  max: 5,
 };

@@ -1,76 +1,92 @@
-// Porto Sol — renderer, scene, lights and the chase camera.
+// Porto Sol — renderer / scene / lights / sky (Round 2 rebuild).
+// Cheap Lambert-friendly setup: one directional sun with shadows plus
+// hemisphere fill, fog matched to the sky colour, and a simple gradient
+// sky dome with a few flat translucent clouds.
+
 import * as THREE from 'three';
-import { CFG } from './config.js';
+import { COLORS } from './config.js';
 
-const _desired = new THREE.Vector3();
-const _forward = new THREE.Vector3();
-const _look = new THREE.Vector3();
-
-// Renderer: antialiased, soft shadows, sRGB output, capped pixel ratio
-// so high-DPI screens do not pay full native resolution.
 export function createRenderer(canvas) {
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-  renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setSize(1280, 720);
   return renderer;
 }
 
-// Scene: warm sunset sky, matching fog so the horizon melts into it.
-export function createScene() {
+export function createScene(THREE) {
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(CFG.colors.sky);
-  scene.fog = new THREE.Fog(CFG.colors.fog, 90, 700);
+  scene.background = new THREE.Color(COLORS.sky);
+  scene.fog = new THREE.Fog(COLORS.sky, 200, 900);
   return scene;
 }
 
-// Perspective camera, wide enough for driving, far plane past the city.
-export function createCamera() {
-  return new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 2000);
-}
-
-// Golden-hour lighting: a soft sky/ground hemisphere plus a low warm
-// sun that casts the long shadows. Shadow frustum covers the city.
-export function setupLights(scene) {
-  const hemi = new THREE.HemisphereLight(CFG.colors.hemiSky, CFG.colors.hemiGround, 0.85);
-  scene.add(hemi);
-
-  const sun = new THREE.DirectionalLight(CFG.colors.sun, 2.2);
-  sun.position.set(-180, 140, 120);
+export function addLights(THREE, scene) {
+  const sun = new THREE.DirectionalLight(0xfff2d9, 1.6);
+  sun.position.set(180, 260, 120);
   sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048);
-  sun.shadow.camera.left = -420;
-  sun.shadow.camera.right = 420;
-  sun.shadow.camera.top = 460;
-  sun.shadow.camera.bottom = -420;
+  sun.shadow.camera.left = -400;
+  sun.shadow.camera.right = 400;
+  sun.shadow.camera.top = 400;
+  sun.shadow.camera.bottom = -400;
   sun.shadow.camera.near = 10;
   sun.shadow.camera.far = 900;
-  sun.shadow.bias = -0.0004;
+  sun.shadow.bias = -0.0005;
   scene.add(sun);
-  scene.add(sun.target);
-  return { hemi, sun };
+
+  const hemi = new THREE.HemisphereLight(0xbfd9ee, 0x4a7c3a, 0.9);
+  scene.add(hemi);
+
+  return { sun, hemi };
 }
 
-// Chase camera. Follows behind the player's heading (0 rad = +Z), closer
-// on foot and pulled back in a car; G.camFar (toggled by the C key in the
-// input module) forces the far distance on foot too. Position is smoothed
-// with an exponential lerp so turns do not snap; the look target sits a
-// few metres ahead so the player is framed slightly low in view.
-export function updateCamera(G, dt) {
-  const p = G.player;
-  const inCar = !!p.inCar;
-  const dist = (inCar || G.camFar) ? CFG.camera.farDist : CFG.camera.nearDist;
+export function addSky(THREE, scene) {
+  // Gradient sky dome: vertex-coloured sphere, back side, no fog on it.
+  const geo = new THREE.SphereGeometry(850, 24, 16);
+  const top = new THREE.Color(0x5f9ccf);
+  const bottom = new THREE.Color(0xcfe6f2);
+  const colors = [];
+  const pos = geo.attributes.position;
+  for (let i = 0; i < pos.count; i++) {
+    const t = Math.max(0, Math.min(1, (pos.getY(i) / 850) * 0.5 + 0.5));
+    const c = bottom.clone().lerp(top, t);
+    colors.push(c.r, c.g, c.b);
+  }
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  const skyMat = new THREE.MeshBasicMaterial({
+    vertexColors: true,
+    side: THREE.BackSide,
+    fog: false,
+  });
+  const sky = new THREE.Mesh(geo, skyMat);
+  sky.name = 'SkyDome';
+  scene.add(sky);
 
-  _forward.set(Math.sin(p.heading), 0, Math.cos(p.heading));
-  _desired.copy(p.pos).addScaledVector(_forward, -dist);
-  _desired.y = p.pos.y + CFG.camera.height;
+  // A few flat translucent white clouds drifting high above the city.
+  const cloudMat = new THREE.MeshBasicMaterial({
+    color: 0xffffff,
+    transparent: true,
+    opacity: 0.75,
+    fog: false,
+  });
+  const cloudGeo = new THREE.PlaneGeometry(90, 28);
+  const spots = [
+    { x: -160, y: 150, z: -220, s: 1.2 },
+    { x: 120, y: 170, z: -120, s: 1.0 },
+    { x: 240, y: 140, z: 180, s: 1.4 },
+    { x: -60, y: 180, z: 260, s: 0.9 },
+    { x: -260, y: 160, z: 60, s: 1.1 },
+  ];
+  for (const s of spots) {
+    const cloud = new THREE.Mesh(cloudGeo, cloudMat);
+    cloud.position.set(s.x, s.y, s.z);
+    cloud.rotation.x = -Math.PI / 2;
+    cloud.scale.setScalar(s.s);
+    cloud.name = 'Cloud';
+    scene.add(cloud);
+  }
 
-  const k = 1 - Math.exp(-CFG.camera.lerp * dt);
-  G.camera.position.lerp(_desired, k);
-
-  _look.copy(p.pos).addScaledVector(_forward, 6);
-  _look.y = p.pos.y + 1.4;
-  G.camera.lookAt(_look);
+  return sky;
 }

@@ -1,40 +1,58 @@
-// save.js — Porto Sol: simpan / muat progres lewat localStorage.
-// Semua akses dibungkus try/catch: mode privat atau storage penuh tidak
-// boleh melempar ke game.
-const KEY = 'porto-sol-save-v1';
+// save.js — Simpan/muat progres Porto Sol di localStorage.
+// Ditulis baru dari nol untuk rebuild round 2.
+
+const SAVE_KEY = 'portosol-save-v1';
+
+function storageAvailable() {
+  try {
+    return typeof localStorage !== 'undefined' && localStorage !== null;
+  } catch (e) {
+    return false;
+  }
+}
 
 export function saveGame(G) {
+  if (!G || !storageAvailable()) return false;
+  const data = {
+    money: typeof G.money === 'number' ? G.money : 0,
+    missionIndex: G.mission && typeof G.mission.index === 'number' ? G.mission.index : 0,
+    health: typeof G.health === 'number' ? G.health : 100,
+    playerX: G.player && typeof G.player.x === 'number' ? G.player.x : 0,
+    playerZ: G.player && typeof G.player.z === 'number' ? G.player.z : 0,
+  };
   try {
-    const p = G.player || {};
-    const data = {
-      version: 1,
-      cash: p.cash || 0,
-      health: p.health ?? 100,
-      missionsDone: (G.stats && G.stats.missionsDone) || 0,
-      time: typeof G.time === 'number' ? G.time : 10,
-      pos: p.pos
-        ? { x: p.pos.x || 0, z: p.pos.z || 0, heading: p.heading || 0 }
-        : { x: 0, z: 0, heading: 0 },
-    };
-    localStorage.setItem(KEY, JSON.stringify(data));
+    localStorage.setItem(SAVE_KEY, JSON.stringify(data));
     return true;
-  } catch { return false; }
+  } catch (e) {
+    return false;
+  }
 }
 
 export function loadGame() {
+  if (!storageAvailable()) return null;
   try {
-    const raw = localStorage.getItem(KEY);
+    const raw = localStorage.getItem(SAVE_KEY);
     if (!raw) return null;
-    const s = JSON.parse(raw);
-    if (!s || typeof s !== 'object' || s.version !== 1) return null;
-    return s;
-  } catch { return null; }
-}
-
-export function hasSave() {
-  try { return localStorage.getItem(KEY) !== null; } catch { return false; }
+    const data = JSON.parse(raw);
+    if (!data || typeof data !== 'object') return null;
+    return {
+      money: typeof data.money === 'number' ? data.money : 0,
+      missionIndex: typeof data.missionIndex === 'number' ? data.missionIndex : 0,
+      health: typeof data.health === 'number' ? data.health : 100,
+      playerX: typeof data.playerX === 'number' ? data.playerX : 0,
+      playerZ: typeof data.playerZ === 'number' ? data.playerZ : 0,
+    };
+  } catch (e) {
+    return null;
+  }
 }
 
 export function clearSave() {
-  try { localStorage.removeItem(KEY); } catch { /* abaikan */ }
+  if (!storageAvailable()) return false;
+  try {
+    localStorage.removeItem(SAVE_KEY);
+    return true;
+  } catch (e) {
+    return false;
+  }
 }

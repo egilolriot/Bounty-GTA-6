@@ -1,300 +1,237 @@
-// hud.js — Porto Sol: HUD, minimap, layar menu/pause/misi, dan pesan singkat.
-// Modul ini hanya menyentuh DOM yang tercantum di kontrak; semua state game
-// dibaca dari objek G yang dilewatkan oleh main loop.
-const $ = (id) => document.getElementById(id);
+// hud.js — HUD DOM dan minimap Porto Sol.
+// Ditulis baru dari nol untuk rebuild round 2.
+// Minimap WAJIB selalu menggambar peta (jalan + pemain), tidak boleh kosong.
 
-// Nama layar logis -> id elemen di index.html. null = tidak ada layar tampil.
-const SCREEN_IDS = {
-  menu: 'menu',
-  pause: 'pause-menu',
-  mission: 'mission-screen',
-  gameover: 'gameover-screen',
-  complete: 'complete-screen',
-  none: null,
-  'mission-complete': null,
-};
+import * as CONFIG from './config.js';
 
-const WEAPON_NAMES = { 1: 'Pistol', 2: 'SMG', 3: 'Shotgun' };
+const CITY_HALF = (typeof CONFIG.CITY_HALF === 'number' && CONFIG.CITY_HALF > 0)
+  ? CONFIG.CITY_HALF
+  : 360;
+const CITY_SIZE = CITY_HALF * 2;
 
-function money(n) {
-  return '$' + Math.max(0, Math.floor(n || 0)).toLocaleString('en-US');
+export function bindHUD() {
+  const byId = (id) => {
+    try { return document.getElementById(id); } catch (e) { return null; }
+  };
+  return {
+    healthFill: byId('health-fill'),
+    healthNum: byId('health-num'),
+    money: byId('money'),
+    stars: byId('stars'),
+    missionLabel: byId('mission-label'),
+    missionText: byId('mission-text'),
+    message: byId('message'),
+    minimap: byId('minimap'),
+    speed: byId('speed'),
+    score: byId('score'),
+  };
 }
 
-function clock(t) {
-  const h = typeof t === 'number' ? t : 10;
-  const hh = Math.floor(h) % 24;
-  const mm = Math.floor(((h % 1) + 1) % 1 * 60);
-  return String(hh).padStart(2, '0') + ':' + String(mm).padStart(2, '0');
+function setText(el, text) {
+  if (el) el.textContent = text;
 }
 
-function starRow(level) {
-  const n = Math.max(0, Math.min(5, Math.round(level || 0)));
-  return '★'.repeat(n) + '☆'.repeat(5 - n);
-}
+export function updateHUD(G, refs) {
+  if (!refs) return;
+  const health = Math.max(0, Math.min(100, Math.round(G.health || 0)));
+  if (refs.healthFill) refs.healthFill.style.width = `${health}%`;
+  setText(refs.healthNum, String(health));
+  setText(refs.money, `$${Math.floor(G.money || 0)}`);
+  const wanted = Math.max(0, Math.min(5, G.wanted || 0));
+  setText(refs.stars, '★'.repeat(wanted) + '☆'.repeat(5 - wanted));
 
-function bindClick(id, fn) {
-  const b = $(id);
-  if (b) b.addEventListener('click', fn);
-}
+  const m = G.mission;
+  if (m) {
+    setText(refs.missionLabel, m.label || 'Misi');
+    const stageNote = m.done
+      ? 'Selesai'
+      : (m.stage === 1 ? 'Antar paket ke penanda!' : `Target (${Math.round(m.targetX)}, ${Math.round(m.targetZ)})`);
+    setText(refs.missionText, `${stageNote} • Hadiah $${m.reward || 0}`);
+  } else {
+    setText(refs.missionLabel, 'Tidak ada misi');
+    setText(refs.missionText, '—');
+  }
 
-export function initHud(G) {
-  const el = {};
-  for (const id of [
-    'game', 'hud', 'minimap', 'wanted', 'health-fill', 'cash', 'time',
-    'objective', 'objective-title', 'objective-text', 'message', 'speed',
-    'weapon', 'crosshair', 'menu', 'pause-menu', 'mission-screen',
-    'gameover-screen', 'complete-screen', 'loading', 'save-info',
-    'mission-title', 'mission-desc',
-  ]) el[id] = $(id);
+  // Kecepatan: pakai kecepatan kendaraan bila mengendarai, bila tidak kecepatan jalan kaki.
+  let speed = 0;
+  if (G.player) {
+    if (!G.player.onFoot && G.player.vehicle && typeof G.player.vehicle.speed === 'number') {
+      speed = Math.abs(G.player.vehicle.speed);
+    } else if (typeof G.player.speed === 'number') {
+      speed = Math.abs(G.player.speed);
+    }
+  }
+  setText(refs.speed, `${Math.round(speed * 3.6)} km/h`);
+  setText(refs.score, String(Math.floor(G.score || 0)));
 
-  const ctx = el.minimap ? el.minimap.getContext('2d') : null;
-  G.hud = { el, ctx, msgTimer: 0, vignette: null, lastMinimap: 0 };
-
-  // Vignette merah untuk darah rendah (tidak ada id-nya di index.html,
-  // jadi dibuat di sini dan ditempel ke body).
-  const vig = document.createElement('div');
-  vig.id = 'low-health-vignette';
-  vig.style.cssText = 'position:fixed;inset:0;pointer-events:none;opacity:0;'
-    + 'background:radial-gradient(ellipse at center,transparent 55%,rgba(200,0,0,.55) 100%);'
-    + 'transition:opacity .3s;z-index:40;';
-  document.body.appendChild(vig);
-  G.hud.vignette = vig;
-
-  if (el.loading) el.loading.style.display = 'none';
-
-  bindClick('btn-start', () => {
-    if (G.audio) G.audio.resume();
-    if (typeof G.startGame === 'function') G.startGame();
-    else showScreen(G, 'none');
-  });
-  bindClick('btn-continue', () => {
-    if (G.audio) G.audio.resume();
-    if (typeof G.continueGame === 'function') G.continueGame();
-    else showScreen(G, 'none');
-  });
-  bindClick('btn-howto', () => showMessage(G,
-    'WASD jalan / mengemudi • E masuk mobil • F rebut mobil • klik tembak • Spasi lompat / rem • P jeda', 5000));
-  bindClick('btn-resume', () => {
-    if (typeof G.resumeGame === 'function') G.resumeGame();
-    else showScreen(G, 'none');
-  });
-  bindClick('btn-restart', () => {
-    if (typeof G.restartGame === 'function') G.restartGame();
-    else location.reload();
-  });
-  bindClick('btn-retry', () => {
-    if (typeof G.restartGame === 'function') G.restartGame();
-    else location.reload();
-  });
-  bindClick('btn-play-again', () => {
-    if (typeof G.restartGame === 'function') G.restartGame();
-    else location.reload();
-  });
-  bindClick('btn-quit', () => {
-    if (typeof G.quitToMenu === 'function') G.quitToMenu();
-    else showScreen(G, 'menu');
-  });
-  bindClick('btn-mute', (ev) => {
-    G.muted = !G.muted;
-    if (G.audio && typeof G.audio.setMuted === 'function') G.audio.setMuted(G.muted);
-    if (ev && ev.target) ev.target.textContent = G.muted ? 'Unmute' : 'Mute';
-  });
-  bindClick('btn-mission-close', () => {
-    showScreen(G, 'none');
-    if (G.mode === 'pause' && typeof G.resumeGame === 'function') G.resumeGame();
-  });
-
-  // Info simpanan di menu utama, bila ada.
-  if (el['save-info']) {
-    try {
-      const raw = localStorage.getItem('porto-sol-save-v1');
-      if (raw) {
-        const s = JSON.parse(raw);
-        el['save-info'].textContent = 'Simpanan: $' + (s.cash || 0)
-          + ' • ' + (s.missionsDone || 0) + ' misi selesai';
-      } else {
-        el['save-info'].textContent = 'Belum ada simpanan.';
-      }
-    } catch { el['save-info'].textContent = ''; }
+  // Pesan sementara (#message) hanya saat masih dalam masa tampil.
+  if (refs.message) {
+    if (G.messageUntil > G.time && G.messageText) {
+      refs.message.textContent = G.messageText;
+      refs.message.style.display = 'block';
+    } else {
+      refs.message.style.display = 'none';
+    }
   }
 }
 
-export function updateHud(G, dt) {
-  const h = G.hud;
-  if (!h) return;
-  const el = h.el;
-  const p = G.player || {};
+// --- Minimap ---------------------------------------------------------------
 
-  if (el.cash) el.cash.textContent = money(p.cash);
-
-  const car = p.inCar || null;
-  const spd = car ? (car.speed || 0) : (p.speed || 0);
-  if (el.speed) el.speed.textContent = Math.round(Math.abs(spd) * 3.6) + ' km/h';
-
-  const maxHp = p.maxHealth || 100;
-  const hp = Math.max(0, Math.min(maxHp, p.health ?? 100));
-  if (el['health-fill']) {
-    el['health-fill'].style.width = (hp / maxHp * 100) + '%';
-    el['health-fill'].style.background = hp < 30 ? '#e33' : hp < 60 ? '#fa0' : '#3d3';
+// Normalisasi satu jalan ke {x1, z1, x2, z2}. Mendukung beberapa bentuk
+// yang mungkin dipakai city.js: {x1,z1,x2,z2}, {a:{x,z}, b:{x,z}},
+// {from:{x,z}, to:{x,z}}, {start:{x,z}, end:{x,z}}.
+function normalizeRoad(r) {
+  if (!r) return null;
+  if (typeof r.x1 === 'number' && typeof r.z1 === 'number'
+    && typeof r.x2 === 'number' && typeof r.z2 === 'number') {
+    return { x1: r.x1, z1: r.z1, x2: r.x2, z2: r.z2 };
   }
-
-  if (el.wanted) {
-    el.wanted.textContent = starRow(G.wanted);
-    el.wanted.style.color = (G.wanted || 0) >= 3 ? '#f44' : '#fd0';
+  const a = r.a || r.from || r.start;
+  const b = r.b || r.to || r.end;
+  if (a && b && typeof a.x === 'number' && typeof a.z === 'number'
+    && typeof b.x === 'number' && typeof b.z === 'number') {
+    return { x1: a.x, z1: a.z, x2: b.x, z2: b.z };
   }
-
-  const m = G.mission || {};
-  if (el['objective-text']) {
-    el['objective-text'].textContent = m.objective || 'Jelajahi Porto Sol — cari kerja, kumpulkan uang.';
+  // Jalan sumbu: {axis:'x'|'z', at: n, from: n, to: n}
+  if ((r.axis === 'x' || r.axis === 'z') && typeof r.at === 'number') {
+    const from = typeof r.from === 'number' ? r.from : -CITY_HALF;
+    const to = typeof r.to === 'number' ? r.to : CITY_HALF;
+    if (r.axis === 'x') return { x1: from, z1: r.at, x2: to, z2: r.at };
+    return { x1: r.at, z1: from, x2: r.at, z2: to };
   }
-  if (el['objective-title']) {
-    let title = 'Free Roam';
-    try {
-      if (typeof G.missionTitle === 'function') title = G.missionTitle(G) || title;
-    } catch { /* biarkan judul default */ }
-    el['objective-title'].textContent = (m.index >= 0) ? title : 'Free Roam';
-  }
-
-  if (el.weapon) {
-    const w = p.weapon;
-    const name = typeof w === 'number' ? (WEAPON_NAMES[w] || 'Pistol') : (w || 'Fists');
-    const ammo = (typeof p.ammo === 'number' && typeof w === 'number') ? ' • ' + p.ammo : '';
-    el.weapon.textContent = name + ammo;
-  }
-
-  if (el.time) el.time.textContent = clock(G.time);
-
-  if (el.crosshair) {
-    const armed = p.onFoot && p.weapon && p.weapon !== 'Fists' && p.weapon !== 'None';
-    el.crosshair.style.display = armed ? 'block' : 'none';
-  }
-
-  if (h.vignette) {
-    h.vignette.style.opacity = hp < 30 ? String(1 - hp / 30) : '0';
-  }
-
-  drawMinimap(G);
+  return null;
 }
 
-export function showMessage(G, text, ms = 2500) {
-  const el = G.hud ? G.hud.el.message : $('message');
-  if (!el) return;
-  el.textContent = text;
-  el.style.display = 'block';
-  el.style.opacity = '1';
-  if (G.hud) clearTimeout(G.hud.msgTimer);
-  const t = setTimeout(() => { el.style.opacity = '0'; }, ms);
-  if (G.hud) G.hud.msgTimer = t;
+function normalizeBuilding(b) {
+  if (!b) return null;
+  const x = typeof b.x === 'number' ? b.x : 0;
+  const z = typeof b.z === 'number' ? b.z : 0;
+  const w = typeof b.w === 'number' ? b.w : (typeof b.size === 'number' ? b.size : 20);
+  const d = typeof b.d === 'number' ? b.d : (typeof b.size === 'number' ? b.size : 20);
+  return { x, z, w, d };
 }
 
-export function drawMinimap(G) {
-  const h = G.hud;
-  if (!h || !h.ctx || !h.el.minimap) return;
-  const cv = h.el.minimap;
-  const ctx = h.ctx;
-  const W = cv.width;
-  const H = cv.height;
-  const city = G.city || {};
-  const mm = city.minimap || { roads: [], buildings: [] };
+export function drawMinimap(G, canvas) {
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+  const W = canvas.width || 200;
+  const H = canvas.height || 200;
+  const toX = (x) => ((x + CITY_HALF) / CITY_SIZE) * W;
+  const toY = (z) => ((z + CITY_HALF) / CITY_SIZE) * H;
+  const scale = W / CITY_SIZE;
 
-  // city.bounds memakai kunci x0/z0/x1/z1. Normalisasi dulu ke minX/maxX/
-  // minZ/maxZ — membaca minX langsung dari bounds akan menghasilkan
-  // undefined, skala menjadi NaN, dan minimap kosong (bug v1).
-  const b0 = city.bounds || {};
-  const minX = b0.minX ?? b0.x0 ?? -400;
-  const maxX = b0.maxX ?? b0.x1 ?? 400;
-  const minZ = b0.minZ ?? b0.z0 ?? -400;
-  const maxZ = b0.maxZ ?? b0.z1 ?? 400;
-  const sx = W / Math.max(1, maxX - minX);
-  const sz = H / Math.max(1, maxZ - minZ);
-  const X = (x) => (x - minX) * sx;
-  const Z = (z) => (z - minZ) * sz;
-
+  // 1) Background gelap — canvas tidak pernah dibiarkan kosong.
   ctx.clearRect(0, 0, W, H);
-  ctx.fillStyle = '#0d2b1e';
+  ctx.fillStyle = '#0b1520';
   ctx.fillRect(0, 0, W, H);
 
-  // Rect minimap memakai sudut kiri-atas (x/z), bukan titik tengah.
-  ctx.fillStyle = '#3a3f46';
-  for (const r of mm.roads || []) {
-    ctx.fillRect(X(r.x), Z(r.z), Math.max(1, r.w * sx), Math.max(1, r.h * sz));
-  }
-  ctx.fillStyle = '#5a6b7a';
-  for (const bd of mm.buildings || []) {
-    ctx.fillRect(X(bd.x), Z(bd.z), Math.max(1, bd.w * sx), Math.max(1, bd.h * sz));
+  // 2) Laut di barat (x < -300): area biru.
+  ctx.fillStyle = '#144a7a';
+  ctx.fillRect(0, 0, toX(-300), H);
+
+  // 3) Blok bangunan sebagai kotak.
+  const buildings = (G.city && Array.isArray(G.city.buildings)) ? G.city.buildings : [];
+  ctx.fillStyle = '#3a4756';
+  for (const raw of buildings) {
+    const b = normalizeBuilding(raw);
+    if (!b) continue;
+    ctx.fillRect(toX(b.x - b.w / 2), toY(b.z - b.d / 2), Math.max(1, b.w * scale), Math.max(1, b.d * scale));
   }
 
-  // Marker misi: diamond amber berdenyut.
-  const m = G.mission || {};
-  if (m.target) {
-    const pulse = 3 + 2 * Math.sin(performance.now() / 300);
-    const mx = X(m.target.x);
-    const mz = Z(m.target.z);
-    ctx.fillStyle = '#ffb000';
+  // 4) Jalan-jalan kota sebagai garis abu-abu.
+  const roads = (G.city && Array.isArray(G.city.roads)) ? G.city.roads : [];
+  ctx.strokeStyle = '#8a97a5';
+  ctx.lineWidth = Math.max(1, 6 * scale);
+  ctx.beginPath();
+  let drewRoad = false;
+  for (const raw of roads) {
+    const r = normalizeRoad(raw);
+    if (!r) continue;
+    ctx.moveTo(toX(r.x1), toY(r.z1));
+    ctx.lineTo(toX(r.x2), toY(r.z2));
+    drewRoad = true;
+  }
+  if (!drewRoad) {
+    // Fallback: grid jalan tiap 60 unit agar peta tetap terlihat
+    // bila G.city.roads kosong / formatnya tak dikenal.
+    for (let v = -CITY_HALF; v <= CITY_HALF; v += 60) {
+      ctx.moveTo(toX(v), toY(-CITY_HALF));
+      ctx.lineTo(toX(v), toY(CITY_HALF));
+      ctx.moveTo(toX(-CITY_HALF), toY(v));
+      ctx.lineTo(toX(CITY_HALF), toY(v));
+    }
+  }
+  ctx.stroke();
+
+  // 5) Polisi sebagai titik merah.
+  const police = [];
+  if (Array.isArray(G.police)) police.push(...G.police);
+  if (Array.isArray(G.vehicles)) {
+    for (const v of G.vehicles) {
+      if (v && (v.police === true || v.type === 'police')) police.push(v);
+    }
+  }
+  ctx.fillStyle = '#ff2d2d';
+  for (const p of police) {
+    const px = typeof p.x === 'number' ? p.x : (p.mesh ? p.mesh.position.x : null);
+    const pz = typeof p.z === 'number' ? p.z : (p.mesh ? p.mesh.position.z : null);
+    if (px === null || pz === null) continue;
     ctx.beginPath();
-    ctx.moveTo(mx, mz - pulse - 2);
-    ctx.lineTo(mx + pulse + 2, mz);
-    ctx.lineTo(mx, mz + pulse + 2);
-    ctx.lineTo(mx - pulse - 2, mz);
+    ctx.arc(toX(px), toY(pz), 3, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // 6) Marker misi: diamond kuning berdenyut di target aktif.
+  const t = G.mission && !G.mission.done
+    ? { x: G.mission.targetX, z: G.mission.targetZ }
+    : null;
+  if (t && typeof t.x === 'number' && typeof t.z === 'number') {
+    const pulse = 5 + 2.5 * Math.sin((G.time || 0) * 5);
+    const cx = toX(t.x);
+    const cy = toY(t.z);
+    ctx.fillStyle = '#ffd400';
+    ctx.strokeStyle = '#ffd400';
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - pulse);
+    ctx.lineTo(cx + pulse, cy);
+    ctx.lineTo(cx, cy + pulse);
+    ctx.lineTo(cx - pulse, cy);
     ctx.closePath();
     ctx.fill();
-  }
-
-  // Blip polisi: biru, berkedip merah saat wanted >= 3.
-  // Posisi ada di entri .car atau .officer.
-  for (const e of G.police || []) {
-    const pos = (e.car && e.car.pos) || (e.officer && e.officer.pos);
-    if (!pos) continue;
-    const flash = (G.wanted || 0) >= 3 && Math.floor(performance.now() / 300) % 2 === 1;
-    ctx.fillStyle = flash ? '#f44' : '#38f';
+    ctx.globalAlpha = 0.35;
     ctx.beginPath();
-    ctx.arc(X(pos.x), Z(pos.z), 3, 0, Math.PI * 2);
-    ctx.fill();
+    ctx.arc(cx, cy, pulse + 5, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
   }
 
-  // Panah pemain putih, diputar mengikuti heading (heading 0 = +Z).
-  const p = G.player || {};
-  const px = X(p.pos ? p.pos.x : 0);
-  const pz = Z(p.pos ? p.pos.z : 0);
+  // 7) Pemain: panah putih di posisi pemain, berotasi sesuai heading.
+  // Canvas: sumbu x ke kanan (timur), sumbu y ke bawah (selatan/z).
+  // Arah hadap (sin h, cos h) pada (x, z) -> sudut canvas atan2(cos h, sin h).
+  const px = G.player && typeof G.player.x === 'number' ? G.player.x : 0;
+  const pz = G.player && typeof G.player.z === 'number' ? G.player.z : 0;
+  const heading = G.player && typeof G.player.heading === 'number' ? G.player.heading : 0;
+  const cx = toX(px);
+  const cy = toY(pz);
   ctx.save();
-  ctx.translate(px, pz);
-  ctx.rotate(Math.PI - (p.heading || 0));
-  ctx.fillStyle = '#fff';
+  ctx.translate(cx, cy);
+  ctx.rotate(Math.atan2(Math.cos(heading), Math.sin(heading)));
+  ctx.fillStyle = '#ffffff';
+  ctx.strokeStyle = '#000000';
+  ctx.lineWidth = 1;
   ctx.beginPath();
-  ctx.moveTo(0, -7);
-  ctx.lineTo(5, 6);
-  ctx.lineTo(0, 3);
-  ctx.lineTo(-5, 6);
+  ctx.moveTo(9, 0);
+  ctx.lineTo(-6, -5);
+  ctx.lineTo(-3, 0);
+  ctx.lineTo(-6, 5);
   ctx.closePath();
   ctx.fill();
+  ctx.stroke();
   ctx.restore();
 
-  // Penunjuk utara + kotak viewport di sekitar pemain.
-  ctx.fillStyle = '#fff';
-  ctx.font = 'bold 11px sans-serif';
-  ctx.fillText('N', 5, 13);
-  ctx.strokeStyle = 'rgba(255,255,255,.5)';
-  ctx.strokeRect(px - 30, pz - 22, 60, 44);
-}
-
-export function showScreen(G, name) {
-  const ids = ['menu', 'pause-menu', 'mission-screen', 'gameover-screen', 'complete-screen'];
-  for (const id of ids) {
-    const e = $(id);
-    if (e) e.style.display = 'none';
-  }
-  const target = SCREEN_IDS[name];
-  if (target) {
-    const e = $(target);
-    if (e) e.style.display = 'flex';
-  }
-  const hud = $('hud');
-  if (hud) {
-    hud.style.display = (name === 'menu' || name === 'gameover' || name === 'complete') ? 'none' : '';
-    // The stylesheet hides #hud until it carries the 'on' class; the inline
-    // display alone does not show it. Toggle the class here so the HUD is
-    // visible in every playing state, not only in shot presets.
-    hud.classList.toggle('on', !(name === 'menu' || name === 'gameover' || name === 'complete'));
-  }
-  if (G) G.mode = (name === 'none' || name === 'mission-complete') ? 'playing' : name;
+  // Bingkai tipis.
+  ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(0.5, 0.5, W - 1, H - 1);
 }

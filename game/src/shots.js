@@ -1,149 +1,162 @@
-// shots.js — Preset screenshot untuk dossier make.fun (?shot=X).
-// Menata G menjadi satu frame diam; tidak pernah commit, simpan, atau mint.
-import { showScreen } from './hud.js';
+// shots.js — Penyiapan scene untuk screenshot (?shot=...).
+// Ditulis baru dari nol untuk rebuild round 2.
 
-function setWanted(G, level) {
-  if (typeof G.setWanted === 'function') G.setWanted(level);
-  else {
-    G.wanted = level;
-    G.wantedHeat = level * 25;
-  }
-  if (G.audio) G.audio.siren(level > 0);
-}
+import * as THREE from 'three';
+import * as CONFIG from './config.js';
+import { startMission, MISSIONS } from './missions.js';
+import { makeCarMesh } from './vehicles.js';
+import { makePedMesh } from './pedestrians.js';
 
-function placePlayer(G, x, z, heading) {
-  const p = G.player;
-  if (!p) return;
-  if (p.pos) {
-    p.pos.x = x;
-    p.pos.z = z;
-  }
-  p.heading = heading;
-  if (p.group) {
-    p.group.position.set(x, 0, z);
-    p.group.rotation.y = heading;
+const CITY_HALF = (typeof CONFIG.CITY_HALF === 'number' && CONFIG.CITY_HALF > 0)
+  ? CONFIG.CITY_HALF
+  : 360;
+
+export function shotName() {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    return params.get('shot');
+  } catch (e) {
+    return null;
   }
 }
 
-function placeCar(G, car, x, z, heading, speed = 0) {
-  if (!car) return null;
-  if (car.pos) {
-    car.pos.x = x;
-    car.pos.z = z;
+function setPlayer(G, x, z, heading, onFoot) {
+  if (!G.player) G.player = {};
+  G.player.x = x;
+  G.player.z = z;
+  G.player.heading = heading;
+  G.player.onFoot = onFoot;
+  if (G.player.mesh) {
+    G.player.mesh.position.set(x, 0, z);
+    G.player.mesh.rotation.y = heading;
   }
-  car.heading = heading;
-  car.speed = speed;
-  if (car.group) {
-    car.group.position.set(x, 0, z);
-    car.group.rotation.y = heading;
-  }
-  return car;
 }
 
-// Kamera di belakang pemain: posisi = pos - forward*dist + tinggi,
-// lalu lihat ke pos + forward*6. forward = (sin heading, cos heading).
-function chaseCam(G, dist = 11, height = 4.5) {
-  const p = G.player;
-  if (!G.camera || !p || !p.pos) return;
-  const h = p.heading || 0;
-  const fx = Math.sin(h);
-  const fz = Math.cos(h);
-  G.camera.position.set(p.pos.x - fx * dist, height, p.pos.z - fz * dist);
-  G.camera.lookAt(p.pos.x + fx * 6, 1.5, p.pos.z + fz * 6);
+// Kamera chase di belakang pemain, menghadap searah heading.
+function chaseCamera(G, dist, height) {
+  const h = G.player.heading || 0;
+  const backX = -Math.sin(h);
+  const backZ = -Math.cos(h);
+  G.shotCamera = {
+    x: G.player.x + backX * dist,
+    y: height,
+    z: G.player.z + backZ * dist,
+    lookX: G.player.x + Math.sin(h) * 20,
+    lookY: 1.5,
+    lookZ: G.player.z + Math.cos(h) * 20,
+  };
 }
 
-function driveCar(G, x, z, heading, speed) {
-  const cars = G.cars || [];
-  const car = cars.find((c) => c.kind === 'sports') || cars[0] || null;
-  placeCar(G, car, x, z, heading, speed);
-  if (car && G.player) {
-    G.player.inCar = car;
-    G.player.onFoot = false;
-    G.player.pos = car.pos;
-    car.driver = G.player;
+function placeVehicle(G, v, x, z, heading, speed) {
+  if (!v) return;
+  v.x = x;
+  v.z = z;
+  v.heading = heading;
+  v.speed = speed;
+  if (v.mesh) {
+    v.mesh.position.set(x, 0, z);
+    v.mesh.rotation.y = heading;
   }
-  placePlayer(G, x, z, heading);
-  return car;
 }
 
-export function applyShotPreset(G, name) {
-  G.mode = 'playing';
-  G.time = 10;
-  if (G.mission) {
-    G.mission.index = -1;
-    G.mission.stage = 0;
-    G.mission.objective = '';
-    G.mission.target = null;
-  }
-  setWanted(G, 0);
+// Buat kendaraan NYATA (mesh asli) untuk shot — jangan pernah mesh: null,
+// karena updateVehicles memanggil v.mesh.position setiap frame.
+function makeShotCar(G, color, x, z, heading, speed, kind) {
+  const mesh = makeCarMesh(THREE, color);
+  mesh.position.set(x, 0, z);
+  mesh.rotation.y = heading;
+  if (G.scene) G.scene.add(mesh);
+  const v = { mesh, x, z, heading, speed, color, kind: kind || 'traffic', maxSpeed: kind === 'police' ? 46 : 42 };
+  if (Array.isArray(G.vehicles)) G.vehicles.push(v);
+  return v;
+}
 
-  if (name === 'start') {
-    G.mode = 'menu';
-    placePlayer(G, 0, 0, 0);
-    if (G.camera) {
-      G.camera.position.set(70, 45, 70);
-      G.camera.lookAt(0, 0, 0);
-    }
-    showScreen(G, 'menu');
-    return;
-  }
+// Buat pejalan kaki NYATA (mesh asli) untuk shot — jangan pernah mesh: null.
+function makeShotPed(G, color, x, z) {
+  const mesh = makePedMesh(THREE, color);
+  mesh.position.set(x, 0, z);
+  if (G.scene) G.scene.add(mesh);
+  const p = { mesh, x, z, heading: 0, speed: 1, walkSpeed: 1, targetX: x + 20, targetZ: z };
+  if (Array.isArray(G.peds)) G.peds.push(p);
+  return p;
+}
 
-  showScreen(G, 'none');
+export function applyShot(G, name) {
+  if (!G || !name) return;
+  G.shotMode = name;
 
-  // Screenshot dossier harus menampilkan HUD (minimap, bintang wanted, uang,
-  // objektif): showScreen hanya membersihkan display inline, sementara
-  // stylesheet menyembunyikan #hud sampai ia membawa class 'on' (aliran
-  // start normal menambahkannya di main.js, yang dilewati mode shot).
-  const hudEl = document.getElementById('hud');
-  if (hudEl) hudEl.classList.add('on');
-
-  if (name === 'street') {
-    placePlayer(G, 20, -10, Math.PI * 0.75);
-    if (G.player) {
-      G.player.onFoot = true;
-      G.player.inCar = null;
-    }
-    // Pejalan kaki melingkar di sekitar pemain.
-    (G.peds || []).forEach((pd, i) => {
-      const a = (i / Math.max(1, G.peds.length)) * Math.PI * 2;
-      if (pd.pos) {
-        pd.pos.x = 20 + Math.cos(a) * (6 + i);
-        pd.pos.z = -10 + Math.sin(a) * (6 + i);
+  switch (name) {
+    case 'chase': {
+      // Pemain di mobil, wanted 3, 2 mobil polisi di belakang.
+      G.wanted = 3;
+      let car = G.player && G.player.vehicle ? G.player.vehicle : null;
+      if (!car) {
+        car = makeShotCar(G, 0xffb020, 60, 40, Math.PI / 4, 22, 'player');
+        if (G.player) G.player.vehicle = car;
       }
-      if (pd.group) pd.group.position.set(pd.pos.x, 0, pd.pos.z);
-    });
-    chaseCam(G, 8, 3.5);
-  } else if (name === 'drive') {
-    driveCar(G, 0, 40, 0, 18);
-    (G.cars || []).forEach((c, i) => {
-      if (c !== G.player.inCar) placeCar(G, c, (i % 2 ? 6 : -6), 40 + (i + 1) * 14, 0, 12);
-    });
-    // Tahan gas agar mobil tetap melaju saat frame diambil.
-    if (G.input && G.input.keys) G.input.keys.add('KeyW');
-    chaseCam(G);
-  } else if (name === 'chase') {
-    driveCar(G, 0, 0, 0, 22);
-    setWanted(G, 3);
-    // Entri polisi menyimpan mobil di .car; dua cruiser di samping/depan.
-    (G.police || []).slice(0, 2).forEach((e, i) => {
-      placeCar(G, e.car, i % 2 ? 6 : -6, 14 + i * 8, 0, 18);
-    });
-    if (G.mission) G.mission.objective = 'Lose the cops — break line of sight!';
-    G.time = 17;
-    chaseCam(G);
-  } else if (name === 'mission') {
-    // Berkendara lurus ke marina (city.spots.marina).
-    driveCar(G, -40, 200, 0, 8);
-    if (G.input && G.input.keys) G.input.keys.add('KeyW');
-    if (G.mission) {
-      G.mission.index = 1; // misi ke-2 (0-based)
-      G.mission.stage = 1;
-      G.mission.objective = 'Pick up the client at Marina Plaza';
-      G.mission.target = { x: -40, z: 280 };
+      setPlayer(G, 60, 40, Math.PI / 4, false);
+      placeVehicle(G, car, 60, 40, Math.PI / 4, 22);
+      // Dua mobil polisi mengejar dari belakang (mesh asli).
+      const backX = -Math.sin(Math.PI / 4);
+      const backZ = -Math.cos(Math.PI / 4);
+      makeShotCar(G, 0x1a1a2e, 60 + backX * 18, 40 + backZ * 18, Math.PI / 4, 20, 'police');
+      makeShotCar(G, 0x1a1a2e, 60 + backX * 26 + 6, 40 + backZ * 26, Math.PI / 4, 19, 'police');
+      if (G.mission) startMission(G, 2);
+      chaseCamera(G, 14, 6);
+      break;
     }
-    chaseCam(G);
-  } else {
-    placePlayer(G, 0, 0, 0);
-    chaseCam(G);
+    case 'street': {
+      // Pemain jalan kaki di jalan ramai, traffic + peds aktif, misi 1.
+      G.wanted = 0;
+      setPlayer(G, 0, 0, 0, true);
+      if (G.player) G.player.vehicle = null;
+      startMission(G, 0);
+      // Pastikan ada pejalan kaki di sekitar (mesh asli, bukan null).
+      if (Array.isArray(G.peds) && G.peds.length === 0) {
+        const pedColors = [0x33aa66, 0xaa6633, 0x8833aa, 0xdd3333, 0x3388dd, 0xffb020];
+        for (let i = 0; i < 6; i++) {
+          makeShotPed(G, pedColors[i % pedColors.length], -20 + i * 8, 6 + (i % 2) * 6);
+        }
+      }
+      chaseCamera(G, 10, 5);
+      break;
+    }
+    case 'drive': {
+      // Mengendarai cepat di jalan pesisir (x = -280), kamera chase.
+      G.wanted = 0;
+      let car = G.player && G.player.vehicle ? G.player.vehicle : null;
+      if (!car) {
+        car = makeShotCar(G, 0xdd3333, -280, 0, 0, 30, 'player');
+        if (G.player) G.player.vehicle = car;
+      }
+      setPlayer(G, -280, 0, 0, false);
+      placeVehicle(G, car, -280, 0, 0, 30);
+      if (G.player) G.player.speed = 30;
+      chaseCamera(G, 16, 7);
+      break;
+    }
+    case 'mission': {
+      // Pemain dekat target misi 2, marker terlihat.
+      G.wanted = 0;
+      startMission(G, 1);
+      const m = MISSIONS[1];
+      const tx = m && m.target ? m.target.x : -150;
+      const tz = m && m.target ? m.target.z : 200;
+      setPlayer(G, tx - 25, tz - 25, Math.PI / 4, true);
+      if (G.player) G.player.vehicle = null;
+      // Kamera agak tinggi dari samping agar marker misi terlihat.
+      G.shotCamera = {
+        x: tx - 45,
+        y: 18,
+        z: tz - 45,
+        lookX: tx,
+        lookY: 1,
+        lookZ: tz,
+      };
+      break;
+    }
+    default:
+      // Nama tak dikenal: kembalikan tanpa perubahan.
+      break;
   }
 }

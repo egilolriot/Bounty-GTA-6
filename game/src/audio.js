@@ -1,232 +1,156 @@
-// audio.js — Porto Sol: semua suara disintesis dengan WebAudio.
-// Tanpa file audio, tanpa jaringan. AudioContext dibuat malas saat resume()
-// dipanggil pertama kali, karena browser menuntut gesture pengguna.
-// Setiap metode suara aman dipanggil sebelum resume(): no-op bila context
-// belum ada.
-export class AudioEngine {
-  constructor() {
-    this.ctx = null;
-    this.master = null;
-    this.muted = true; // mulai bisu sampai gesture pertama
-    this.speed = 0; // m/s; dipakai bila tidak ada G yang di-bind
-    this.target = null; // G, bila di-bind — update() membaca kecepatan dari sini
-    this._eng = null; // { osc, gain, filter } suara mesin
-    this._siren = null; // { osc, lfo, gain } sirene polisi
-    this._musicOn = false;
-    this._musicTimer = null;
-    this._nextNote = 0;
-    this._step = 0;
-    this._noiseBuf = null;
+// audio.js — Audio WebAudio murni Porto Sol (tanpa file eksternal).
+// Semua suara disintesis; semua pemanggilan dibungkus try/catch agar game
+// tetap berjalan bila audio diblokir browser.
+// Ditulis baru dari nol untuk rebuild round 2.
+
+export function createAudio() {
+  const audio = {
+    enabled: true,
+    _ctx: null,
+    _engineNodes: null,
+  };
+
+  function ensureCtx() {
+    if (audio._ctx) {
+      if (audio._ctx.state === 'suspended') {
+        audio._ctx.resume().catch(() => {});
+      }
+      return audio._ctx;
+    }
+    const AC = (typeof window !== 'undefined')
+      && (window.AudioContext || window.webkitAudioContext);
+    if (!AC) return null;
+    audio._ctx = new AC();
+    if (audio._ctx.state === 'suspended') {
+      audio._ctx.resume().catch(() => {});
+    }
+    return audio._ctx;
   }
 
-  // Biarkan update() membaca kecepatan mobil pemain langsung dari G.
-  bind(G) {
-    this.target = G;
-    return this;
+  // Satu nada sederhana dengan envelope naik/turun.
+  function tone(freq, dur, type, volume, delay) {
+    const ctx = ensureCtx();
+    if (!ctx) return;
+    const t0 = ctx.currentTime + (delay || 0);
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = type || 'sine';
+    osc.frequency.setValueAtTime(freq, t0);
+    gain.gain.setValueAtTime(0.0001, t0);
+    gain.gain.exponentialRampToValueAtTime(Math.max(0.0001, volume || 0.15), t0 + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(t0);
+    osc.stop(t0 + dur + 0.05);
   }
 
-  _ensure() {
-    if (this.ctx) return true;
+  // Ledakan noise pendek untuk tembakan.
+  function noiseBurst(dur, volume) {
+    const ctx = ensureCtx();
+    if (!ctx) return;
+    const len = Math.max(1, Math.floor(ctx.sampleRate * dur));
+    const buffer = ctx.createBuffer(1, len, ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < len; i++) {
+      data[i] = (Math.random() * 2 - 1) * (1 - i / len);
+    }
+    const src = ctx.createBufferSource();
+    src.buffer = buffer;
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.value = 1800;
+    const gain = ctx.createGain();
+    gain.gain.value = volume || 0.3;
+    src.connect(filter);
+    filter.connect(gain);
+    gain.connect(ctx.destination);
+    src.start();
+  }
+
+  audio.play = function play(name) {
+    if (!audio.enabled) return;
     try {
-      const AC = window.AudioContext || window.webkitAudioContext;
-      if (!AC) return false;
-      this.ctx = new AC();
-      this.master = this.ctx.createGain();
-      this.master.gain.value = this.muted ? 0 : 0.9;
-      this.master.connect(this.ctx.destination);
-      // Buffer noise putih sepanjang 1 detik, dipakai ulang oleh _noise().
-      const len = this.ctx.sampleRate;
-      this._noiseBuf = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
-      const d = this._noiseBuf.getChannelData(0);
-      for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
-    } catch { return false; }
-    return true;
-  }
+      switch (name) {
+        case 'shot':
+          noiseBurst(0.12, 0.3);
+          tone(160, 0.08, 'square', 0.12, 0);
+          break;
+        case 'pickup':
+          tone(660, 0.12, 'sine', 0.18, 0);
+          tone(880, 0.18, 'sine', 0.18, 0.1);
+          break;
+        case 'mission':
+          tone(523, 0.15, 'triangle', 0.2, 0);
+          tone(659, 0.15, 'triangle', 0.2, 0.14);
+          tone(784, 0.3, 'triangle', 0.22, 0.28);
+          break;
+        case 'siren': {
+          // Wail bolak-balik ~1,2 detik (dipanggil ulang selagi wanted > 0).
+          const ctx = ensureCtx();
+          if (!ctx) return;
+          const t0 = ctx.currentTime;
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(700, t0);
+          osc.frequency.linearRampToValueAtTime(1100, t0 + 0.6);
+          osc.frequency.linearRampToValueAtTime(700, t0 + 1.2);
+          gain.gain.setValueAtTime(0.0001, t0);
+          gain.gain.exponentialRampToValueAtTime(0.06, t0 + 0.05);
+          gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 1.2);
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          osc.start(t0);
+          osc.stop(t0 + 1.25);
+          break;
+        }
+        case 'click':
+          tone(1000, 0.05, 'sine', 0.12, 0);
+          break;
+        default:
+          break;
+      }
+    } catch (e) { /* audio tidak boleh mematikan game */ }
+  };
 
-  resume() {
-    if (!this._ensure()) return;
-    if (this.ctx.state === 'suspended') this.ctx.resume();
-    this.setMuted(false);
-    this._startEngine();
-    if (this._musicOn) this._startMusic();
-  }
+  // Dengung mesin loop saat mengendarai; frekuensi mengikuti kecepatan.
+  audio.engine = function engine(on, speed) {
+    try {
+      if (!on) {
+        if (audio._engineNodes) {
+          const n = audio._engineNodes;
+          audio._engineNodes = null;
+          try { n.gain.gain.setTargetAtTime(0, n.ctx.currentTime, 0.05); } catch (e) {}
+          try { n.osc.stop(n.ctx.currentTime + 0.3); } catch (e) {}
+        }
+        return;
+      }
+      const ctx = ensureCtx();
+      if (!ctx) return;
+      const s = typeof speed === 'number' ? Math.abs(speed) : 0;
+      const freq = 45 + s * 2.2;
+      if (!audio._engineNodes) {
+        const osc = ctx.createOscillator();
+        const filter = ctx.createBiquadFilter();
+        const gain = ctx.createGain();
+        osc.type = 'sawtooth';
+        osc.frequency.value = freq;
+        filter.type = 'lowpass';
+        filter.frequency.value = 500;
+        gain.gain.value = 0.05;
+        osc.connect(filter);
+        filter.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start();
+        audio._engineNodes = { osc, filter, gain, ctx };
+      } else {
+        const n = audio._engineNodes;
+        n.osc.frequency.setTargetAtTime(freq, ctx.currentTime, 0.08);
+        n.filter.frequency.setTargetAtTime(400 + s * 18, ctx.currentTime, 0.1);
+      }
+    } catch (e) { /* audio tidak boleh mematikan game */ }
+  };
 
-  setMuted(m) {
-    this.muted = !!m;
-    if (this.master && this.ctx) {
-      this.master.gain.setTargetAtTime(this.muted ? 0 : 0.9, this.ctx.currentTime, 0.05);
-    }
-  }
-
-  // Satu bunyi noise tersaring dengan envelope turun.
-  _noise(dur, filterType, freq, gainVal, when = 0) {
-    if (!this.ctx || this.muted) return;
-    const t = this.ctx.currentTime + when;
-    const src = this.ctx.createBufferSource();
-    src.buffer = this._noiseBuf;
-    const f = this.ctx.createBiquadFilter();
-    f.type = filterType;
-    f.frequency.value = freq;
-    const g = this.ctx.createGain();
-    g.gain.setValueAtTime(gainVal, t);
-    g.gain.exponentialRampToValueAtTime(0.001, t + dur);
-    src.connect(f);
-    f.connect(g);
-    g.connect(this.master);
-    src.start(t);
-    src.stop(t + dur + 0.05);
-  }
-
-  // Satu nada osilator dengan attack singkat, opsional meluncur ke slideTo.
-  _tone(type, freq, dur, gainVal, when = 0, slideTo = 0) {
-    if (!this.ctx || this.muted) return;
-    const t = this.ctx.currentTime + when;
-    const o = this.ctx.createOscillator();
-    o.type = type;
-    o.frequency.setValueAtTime(freq, t);
-    if (slideTo) o.frequency.exponentialRampToValueAtTime(slideTo, t + dur);
-    const g = this.ctx.createGain();
-    g.gain.setValueAtTime(0.0001, t);
-    g.gain.exponentialRampToValueAtTime(gainVal, t + 0.01);
-    g.gain.exponentialRampToValueAtTime(0.001, t + dur);
-    o.connect(g);
-    g.connect(this.master);
-    o.start(t);
-    o.stop(t + dur + 0.05);
-  }
-
-  shoot() {
-    if (!this.ctx) return;
-    this._noise(0.12, 'highpass', 1200, 0.5);
-    this._tone('sine', 160, 0.14, 0.5, 0, 55);
-  }
-
-  crash() {
-    if (!this.ctx) return;
-    this._noise(0.4, 'lowpass', 700, 0.8);
-    this._tone('sine', 90, 0.3, 0.6, 0, 40);
-  }
-
-  horn() {
-    this._tone('square', 340, 0.28, 0.18);
-    this._tone('square', 428, 0.28, 0.18);
-  }
-
-  hurt() {
-    this._tone('sine', 140, 0.18, 0.35, 0, 70);
-  }
-
-  pickup() {
-    this._tone('sine', 880, 0.12, 0.25);
-    this._tone('sine', 1318, 0.2, 0.25, 0.1);
-  }
-
-  mission() {
-    // Arpeggio naik: A3 C#4 E4 A4.
-    [220, 277, 330, 440].forEach((f, i) => this._tone('triangle', f, 0.22, 0.25, i * 0.11));
-  }
-
-  siren(on) {
-    if (on) {
-      if (!this._ensure() || this._siren) return;
-      const o = this.ctx.createOscillator();
-      o.type = 'square';
-      o.frequency.value = 800;
-      const lfo = this.ctx.createOscillator();
-      lfo.type = 'square';
-      lfo.frequency.value = 0.55;
-      const lg = this.ctx.createGain();
-      lg.gain.value = 180;
-      lfo.connect(lg);
-      lg.connect(o.frequency);
-      const g = this.ctx.createGain();
-      g.gain.value = 0.045;
-      o.connect(g);
-      g.connect(this.master);
-      o.start();
-      lfo.start();
-      this._siren = { osc: o, lfo, gain: g };
-    } else if (this._siren) {
-      try {
-        this._siren.osc.stop();
-        this._siren.lfo.stop();
-      } catch { /* sudah berhenti */ }
-      this._siren = null;
-    }
-  }
-
-  music(on) {
-    this._musicOn = !!on;
-    if (on) this._startMusic();
-    else if (this._musicTimer) {
-      clearInterval(this._musicTimer);
-      this._musicTimer = null;
-    }
-  }
-
-  _startEngine() {
-    if (!this.ctx || this._eng) return;
-    const o = this.ctx.createOscillator();
-    o.type = 'sawtooth';
-    o.frequency.value = 55;
-    const f = this.ctx.createBiquadFilter();
-    f.type = 'lowpass';
-    f.frequency.value = 320;
-    f.Q.value = 2;
-    const g = this.ctx.createGain();
-    g.gain.value = 0.0;
-    o.connect(f);
-    f.connect(g);
-    g.connect(this.master);
-    o.start();
-    this._eng = { osc: o, gain: g, filter: f };
-  }
-
-  _startMusic() {
-    if (!this.ctx || this._musicTimer) return;
-    this._nextNote = this.ctx.currentTime + 0.1;
-    this._step = 0;
-    this._musicTimer = setInterval(() => this._scheduleMusic(), 90);
-  }
-
-  _scheduleMusic() {
-    if (!this.ctx) return;
-    // Synthwave A-minor: root bass A F C G, pad chord, hat tiap ketuk 8.
-    const bass = [55, 43.65, 65.41, 49];
-    const pads = [
-      [220, 261.6, 329.6],
-      [174.6, 220, 261.6],
-      [261.6, 329.6, 392],
-      [196, 246.9, 293.7],
-    ];
-    while (this._nextNote < this.ctx.currentTime + 0.25) {
-      const step = this._step % 16;
-      const bar = Math.floor(this._step / 16) % 4;
-      const dt = this._nextNote - this.ctx.currentTime;
-      if (step % 4 === 0) this._tone('triangle', bass[bar], 0.5, 0.10, dt);
-      if (step === 0) pads[bar].forEach((f) => this._tone('sine', f, 1.9, 0.025, dt));
-      if (step % 2 === 0) this._noise(0.03, 'highpass', 6000, 0.03, dt);
-      this._nextNote += 0.22; // ketuk 8 pada ~136 BPM
-      this._step++;
-    }
-  }
-
-  update(dt) {
-    if (!this.ctx || !this._eng) return;
-    let v = this.speed || 0;
-    if (this.target && this.target.player) {
-      const p = this.target.player;
-      v = (p.inCar ? p.inCar.speed : p.speed) || 0;
-    }
-    const t = this.ctx.currentTime;
-    const driving = this.target ? !this.target.player?.onFoot : v > 0.5;
-    const abs = Math.abs(v);
-    this._eng.osc.frequency.setTargetAtTime(45 + Math.min(90, abs * 2.2), t, 0.08);
-    this._eng.filter.frequency.setTargetAtTime(280 + Math.min(900, abs * 22), t, 0.1);
-    this._eng.gain.gain.setTargetAtTime(this.muted ? 0 : (driving ? 0.05 : 0.02), t, 0.1);
-    // Sirene meraung selama ada wanted, diam saat wanted 0.
-    const wantSiren = !!(this.target && (this.target.wanted || 0) > 0);
-    if (wantSiren && !this._siren) this.siren(true);
-    else if (!wantSiren && this._siren) this.siren(false);
-  }
+  return audio;
 }

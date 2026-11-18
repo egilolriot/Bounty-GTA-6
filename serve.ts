@@ -1,74 +1,53 @@
-// A minimal static server for Porto Sol's game/ folder (Node 22, stdlib only):
-//   node serve.ts              serves game/ on http://localhost:8080
-//   node serve.ts --port 9000  serves it on port 9000 instead
-// It only serves files inside game/, with the MIME types a browser game needs.
-// A local development convenience, not a public web server.
-import { createReadStream, statSync } from 'node:fs';
 import { createServer } from 'node:http';
-import { extname, join, normalize, resolve, sep } from 'node:path';
+import { createReadStream, existsSync, statSync } from 'node:fs';
+import { dirname, extname, join, normalize, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const gameRoot = resolve(fileURLToPath(new URL('./game', import.meta.url)));
+// Porto Sol — tiny static file server for local playtesting.
+// Serves the repo root on port 8080, with game/ mounted at /.
 
-const argv = process.argv.slice(2);
-const portFlag = argv.indexOf('--port');
-const wanted = portFlag === -1 ? 8080 : Number(argv[portFlag + 1]);
-const port = Number.isInteger(wanted) && wanted > 0 && wanted < 65536 ? wanted : 8080;
+const repoRoot = dirname(fileURLToPath(import.meta.url));
+const PORT = 8080;
 
-const MIME: Record<string, string> = {
+const CONTENT_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
   '.mjs': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
-  '.json': 'application/json; charset=utf-8',
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
-  '.gif': 'image/gif',
-  '.webp': 'image/webp',
-  '.svg': 'image/svg+xml',
-  '.ico': 'image/x-icon',
-  '.woff2': 'font/woff2',
-  '.glb': 'model/gltf-binary',
-  '.gltf': 'model/gltf+json',
-  '.bin': 'application/octet-stream',
-  '.wasm': 'application/wasm',
-  '.wav': 'audio/wav',
-  '.mp3': 'audio/mpeg',
-  '.ogg': 'audio/ogg',
-  '.txt': 'text/plain; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
 };
 
-createServer((request, response) => {
-  const url = new URL(request.url ?? '/', 'http://localhost');
-  let pathname: string;
-  try {
-    pathname = decodeURIComponent(url.pathname);
-  } catch {
-    response.writeHead(400).end('bad request');
+const server = createServer((req, res) => {
+  const urlPath = decodeURIComponent((req.url || '/').split('?')[0]);
+  // game/ is served at / : /src/main.js means game/src/main.js, and
+  // /index.html means game/index.html. A literal /game/... path works too.
+  const rel = urlPath === '/'
+    ? 'game/index.html'
+    : urlPath.startsWith('/game/')
+      ? urlPath.slice(1)
+      : `game${urlPath}`;
+  const filePath = resolve(join(repoRoot, normalize(rel)));
+
+  // Never serve anything outside the repo root.
+  if (!filePath.startsWith(repoRoot + sep) && filePath !== repoRoot) {
+    res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8' });
+    res.end('Forbidden');
     return;
   }
-  if (pathname.endsWith('/')) pathname += 'index.html';
-  const file = resolve(join(gameRoot, normalize(pathname)));
-  if (file !== gameRoot && !file.startsWith(gameRoot + sep)) {
-    response.writeHead(403).end('forbidden');
+  if (!existsSync(filePath) || !statSync(filePath).isFile()) {
+    res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
+    res.end('Not found');
     return;
   }
-  let size: number;
-  try {
-    const stats = statSync(file);
-    if (!stats.isFile()) throw new Error('not a file');
-    size = stats.size;
-  } catch {
-    response.writeHead(404).end('not found');
-    return;
-  }
-  response.writeHead(200, {
-    'content-type': MIME[extname(file).toLowerCase()] ?? 'application/octet-stream',
-    'content-length': size,
-    'cache-control': 'no-store',
-  });
-  createReadStream(file).pipe(response);
-}).listen(port, '127.0.0.1', () => {
-  console.log(`Porto Sol's game/ is on http://localhost:${port}`);
+  const type = CONTENT_TYPES[extname(filePath).toLowerCase()] || 'application/octet-stream';
+  res.writeHead(200, { 'content-type': type });
+  createReadStream(filePath).pipe(res);
+});
+
+server.listen(PORT, () => {
+  console.log(`Porto Sol running at http://localhost:${PORT}/`);
+  console.log(`Serving repo root: ${fileURLToPath(new URL('.', import.meta.url))}`);
 });
