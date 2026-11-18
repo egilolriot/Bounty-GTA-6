@@ -1,8 +1,8 @@
 # Porto Sol
 
-[![make.fun bounty](https://img.shields.io/badge/make.fun-bounty-gta6--01-orange)](https://make.fun/bounty/gta6-01)
-[![make.fun leaderboard](https://img.shields.io/badge/make.fun-leaderboard-gta6--01-blue)](https://make.fun/bounty/gta6-01)
-[![make.fun entry](https://img.shields.io/badge/make.fun-entry-gta6--01-green)](https://make.fun/bounty/gta6-01)
+[![make.fun · gta6-01](https://make.fun/badge/gta6-01.svg)](https://make.fun/bounty/gta6-01?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
+[![rank](https://make.fun/badge/gta6-01/egilolriot/Bounty-GTA-6/rank.svg)](https://make.fun/bounty/gta6-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
+[![reward](https://make.fun/badge/gta6-01/egilolriot/Bounty-GTA-6/reward.svg)](https://make.fun/bounty/gta6-01?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
 
 **Bounty:** [gta6-01 — Porto Sol](https://make.fun/bounty/gta6-01)
 **Referral:** `zegsd6t5` — https://make.fun/r/zegsd6t5
